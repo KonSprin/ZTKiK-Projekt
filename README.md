@@ -66,3 +66,27 @@ The script also supports `--start-time` and `--end-time`. The report evaluates
 two attack hypotheses: credential attacks (brute force/password spraying)
 through failed logins, and lateral movement through successful logons between
 different computers.
+
+## Attack Simulation
+
+To prepare data for the second group, do not modify the original LANL files.
+Create a bounded working fragment and inject reproducible synthetic events:
+
+```bash
+python3 simulate_attacks.py \
+  "$HOME/Desktop/ZTKIK/DANE 1/auth" \
+  simulated_auth.csv \
+  --max-events 100000 \
+  --seed 2026
+```
+
+The simulator adds two attack patterns:
+
+1. **Password spraying**: repeated failed logons against several user accounts.
+2. **Lateral movement**: successful logons by one user account from one source
+   computer to many destination computers.
+
+The output contains the baseline fragment followed by synthetic records and
+can be handed to the other group without revealing the attack types. Keep the
+command, seed, and attack description private until the other group finishes
+its analysis. The original `auth` file is never changed.
