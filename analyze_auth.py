@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gzip
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TextIO
 
 
 FIELD_NAMES = (
@@ -27,6 +29,7 @@ FIELD_NAMES = (
     "result",
 )
 HUMAN_USER = re.compile(r"^U\d+@")
+FAILURE_VALUES = {"Fail", "Failure"}
 
 
 @dataclass(frozen=True)
@@ -42,25 +45,90 @@ class Event:
     result: str
 
 
-def read_events(path: Path) -> list[Event]:
-    events: list[Event] = []
-    with path.open(newline="", encoding="utf-8") as handle:
+@dataclass
+class Analysis:
+    event_count: int = 0
+    invalid_count: int = 0
+    result_counts: Counter[str] = field(default_factory=Counter)
+    auth_counts: Counter[str] = field(default_factory=Counter)
+    logon_counts: Counter[str] = field(default_factory=Counter)
+    user_counts: Counter[str] = field(default_factory=Counter)
+    destination_counts: Counter[str] = field(default_factory=Counter)
+    lateral_pairs: Counter[tuple[str, str]] = field(default_factory=Counter)
+    lateral_users: set[str] = field(default_factory=set)
+    lateral_destinations: set[str] = field(default_factory=set)
+    failed_users: Counter[str] = field(default_factory=Counter)
+    failed_sources: Counter[str] = field(default_factory=Counter)
+    minimum_time: int | None = None
+    maximum_time: int | None = None
+
+    def add(self, event: Event) -> None:
+        self.event_count += 1
+        self.result_counts[event.result] += 1
+        self.auth_counts[event.authentication_type] += 1
+        self.logon_counts[event.logon_type] += 1
+        self.destination_counts[event.destination_computer] += 1
+        self.minimum_time = (
+            event.time if self.minimum_time is None else min(self.minimum_time, event.time)
+        )
+        self.maximum_time = (
+            event.time if self.maximum_time is None else max(self.maximum_time, event.time)
+        )
+
+        principal = human_principal(event)
+        if principal is not None:
+            self.user_counts[principal] += 1
+            if is_failure(event.result):
+                self.failed_users[principal] += 1
+        if is_failure(event.result):
+            self.failed_sources[event.source_computer] += 1
+        if (
+            principal is not None
+            and event.source_computer != event.destination_computer
+            and event.result == "Success"
+        ):
+            self.lateral_pairs[(principal, event.destination_computer)] += 1
+            self.lateral_users.add(principal)
+            self.lateral_destinations.add(event.destination_computer)
+
+
+def open_input(path: Path) -> TextIO:
+    if path.suffix == ".gz":
+        return gzip.open(path, mode="rt", newline="", encoding="utf-8")
+    return path.open(newline="", encoding="utf-8")
+
+
+def analyze_file(
+    path: Path,
+    *,
+    max_events: int | None = None,
+    start_time: int | None = None,
+    end_time: int | None = None,
+) -> Analysis:
+    analysis = Analysis()
+    with open_input(path) as handle:
         reader = csv.reader(handle)
         for line_number, row in enumerate(reader, start=1):
             if not row or all(not value.strip() for value in row):
                 continue
             if len(row) != len(FIELD_NAMES):
-                raise ValueError(
-                    f"{path}:{line_number}: expected 9 columns, got {len(row)}"
-                )
+                analysis.invalid_count += 1
+                continue
             try:
-                time = int(row[0])
-            except ValueError as error:
-                raise ValueError(f"{path}:{line_number}: invalid time {row[0]!r}") from error
-            events.append(Event(time, *row[1:]))
-    if not events:
-        raise ValueError(f"{path}: no events found")
-    return events
+                event = Event(int(row[0]), *row[1:])
+            except ValueError:
+                analysis.invalid_count += 1
+                continue
+            if start_time is not None and event.time < start_time:
+                continue
+            if end_time is not None and event.time > end_time:
+                continue
+            analysis.add(event)
+            if max_events is not None and analysis.event_count >= max_events:
+                break
+    if analysis.event_count == 0:
+        raise ValueError(f"{path}: no valid events found")
+    return analysis
 
 
 def human_principal(event: Event) -> str | None:
@@ -70,40 +138,26 @@ def human_principal(event: Event) -> str | None:
     return None
 
 
-def human_lateral_events(events: list[Event]) -> list[tuple[str, str, str, int]]:
-    """Return human-account logons to other computers, ranked by rarity."""
-    pairs = Counter(
-        (human_principal(event), event.destination_computer)
-        for event in events
-        if human_principal(event)
-        and event.source_computer != event.destination_computer
-        and event.result == "Success"
-    )
+def is_failure(result: str) -> bool:
+    return result in FAILURE_VALUES
+
+
+def human_lateral_events(
+    pairs: Counter[tuple[str, str]],
+) -> list[tuple[str, str, str, int]]:
+    """Return human-account logons to other computers, ranked by frequency."""
     return [
         (user, computer, "success", count)
         for (user, computer), count in pairs.most_common()
     ]
 
 
-def make_report(events: list[Event], input_path: Path) -> str:
-    result_counts = Counter(event.result for event in events)
-    auth_counts = Counter(event.authentication_type for event in events)
-    logon_counts = Counter(event.logon_type for event in events)
-    source_users = Counter(
-        principal for event in events if (principal := human_principal(event))
+def make_report(analysis: Analysis, input_path: Path) -> str:
+    lateral = human_lateral_events(analysis.lateral_pairs)
+    duration = analysis.maximum_time - analysis.minimum_time
+    repeated_destinations = sum(
+        1 for count in analysis.destination_counts.values() if count > 1
     )
-    destinations = Counter(event.destination_computer for event in events)
-    human_events = [event for event in events if human_principal(event)]
-    lateral = human_lateral_events(events)
-    human_users = {human_principal(event) for event in human_events}
-    human_destinations = {
-        event.destination_computer
-        for event in human_events
-        if event.source_computer != event.destination_computer
-    }
-    times = [event.time for event in events]
-    duration = max(times) - min(times)
-    repeated_destinations = sum(1 for count in destinations.values() if count > 1)
 
     lines = [
         "# Authentication Event Analysis",
@@ -112,27 +166,29 @@ def make_report(events: list[Event], input_path: Path) -> str:
         "",
         "## 1. Data Scope and Quality",
         "",
-        f"- Number of events: **{len(events)}**.",
-        f"- Time range: **{min(times)}–{max(times)}** (span: {duration} s).",
-        f"- Unique user accounts (`U...@...`): **{len(source_users)}**.",
-        f"- Unique destination computers: **{len(destinations)}**.",
-        f"- User-account events (`U...@...`): **{len(human_events)}** "
-        f"({len(human_users)} accounts, {len(human_destinations)} destination "
+        f"- Number of valid events: **{analysis.event_count}**.",
+        f"- Time range: **{analysis.minimum_time}–{analysis.maximum_time}** "
+        f"(span: {duration} s).",
+        f"- Unique user accounts (`U...@...`): **{len(analysis.user_counts)}**.",
+        f"- Unique destination computers: **{len(analysis.destination_counts)}**.",
+        f"- User-account events (`U...@...`): **{sum(analysis.user_counts.values())}** "
+        f"({len(analysis.user_counts)} accounts, {len(analysis.lateral_destinations)} destination "
         "computer(s)).",
-        f"- Successful events: **{result_counts['Success']}**; "
-        f"failures: **{result_counts['Failure']}**.",
+        f"- Successful events: **{analysis.result_counts['Success']}**; "
+        f"failures: **{sum(analysis.result_counts[value] for value in FAILURE_VALUES)}**.",
+        f"- Invalid records skipped: **{analysis.invalid_count}**.",
         "",
-        "All records in the sample have timestamp `1`, so time-series analysis "
-        "and burst detection are inconclusive. The results below describe "
-        "cross-sectional patterns rather than changes over time.",
+        "The selected fragment may not represent the full time range. "
+        "Time-series conclusions should therefore be treated as local to this "
+        "fragment and validated against a longer baseline.",
         "",
         "## 2. Descriptive Statistics",
         "",
         "| Feature | Distribution |",
         "|---|---|",
-        f"| Authentication type | {format_counter(auth_counts)} |",
-        f"| Logon type | {format_counter(logon_counts)} |",
-        f"| Result | {format_counter(result_counts)} |",
+        f"| Authentication type | {format_counter(analysis.auth_counts)} |",
+        f"| Logon type | {format_counter(analysis.logon_counts)} |",
+        f"| Result | {format_counter(analysis.result_counts)} |",
         "",
         f"Repeated destination computers: **{repeated_destinations}**. "
         "Most frequent destinations:",
@@ -142,7 +198,7 @@ def make_report(events: list[Event], input_path: Path) -> str:
     ]
     lines.extend(
         f"| `{computer}` | {count} |"
-        for computer, count in destinations.most_common(10)
+        for computer, count in analysis.destination_counts.most_common(10)
     )
 
     lines.extend(
@@ -156,8 +212,8 @@ def make_report(events: list[Event], input_path: Path) -> str:
             "excluded because they are common operational noise in LANL data.",
             "",
             f"- Potential lateral-movement records detected: **{len(lateral)}**.",
-            f"- Affected user accounts: **{len({user for user, _, _, _ in lateral})}**; "
-            f"destination computers: **{len({computer for _, computer, _, _ in lateral})}**.",
+            f"- Affected user accounts: **{len(analysis.lateral_users)}**; "
+            f"destination computers: **{len(analysis.lateral_destinations)}**.",
             "",
             "| User | Destination computer | Result | Count |",
             "|---|---|---|---:|",
@@ -165,33 +221,50 @@ def make_report(events: list[Event], input_path: Path) -> str:
     )
     lines.extend(f"| `{user}` | `{computer}` | {result} | {count} |" for user, computer, result, count in lateral[:15])
 
-    suspicious = [
-        event
-        for event in human_events
-        if event.source_computer != event.destination_computer
-        and event.result == "Success"
-    ]
+    suspicious = sum(analysis.lateral_pairs.values())
+    failed_attempts = sum(analysis.failed_users.values())
+    lines.extend(
+        [
+            "",
+            "### Failed-login indicators",
+            "",
+            f"- Failed authentication events: **{sum(analysis.result_counts[value] for value in FAILURE_VALUES)}**.",
+            f"- Failed events involving user accounts: **{failed_attempts}**.",
+            f"- User accounts with failures: **{len(analysis.failed_users)}**.",
+            "",
+            "A high concentration of failures for one account or source "
+            "computer would be consistent with brute force or password "
+            "spraying. This fragment should be compared with a longer "
+            "baseline before treating it as a confirmed attack.",
+            "",
+            "| User | Failed attempts |",
+            "|---|---:|",
+        ]
+    )
+    lines.extend(
+        f"| `{user}` | {count} |"
+        for user, count in analysis.failed_users.most_common(15)
+    )
     lines.extend(
         [
             "",
             "## 4. Conclusion",
             "",
-            "The most likely simulated attack is **lateral movement using a "
-            "compromised user account**, potentially involving **pass-the-hash "
-            "or credential reuse**. Evidence:",
+            "The analysis tests two attack hypotheses: **credential attacks** "
+            "(brute force/password spraying) and **lateral movement using a "
+            "compromised user account**.",
             "",
-            f"1. {len(suspicious)} successful user-account logon(s) connect "
-            "different source and destination computers.",
-            "2. This pattern differs from local service and machine logons, "
-            "which dominate normal activity.",
-            "3. Reusing the same account across multiple hosts is consistent "
-            "with an attacker moving through the network.",
+            f"1. The fragment contains {sum(analysis.result_counts[value] for value in FAILURE_VALUES)} "
+            "failed authentication event(s).",
+            f"2. It contains {suspicious} successful user-account logon(s) "
+            "between different computers.",
+            "3. Reuse of one account across multiple hosts is consistent "
+            "with lateral movement; repeated failures would support a "
+            "credential-attack hypothesis.",
             "",
-            "The specific technique and event order cannot be confirmed because "
-            "the sample does not contain all 58 days and every record has the "
-            "same timestamp. To validate this hypothesis, analyze the full "
-            "`auth.txt.gz` file and correlate it with `proc`, `flows`, `dns`, "
-            "and `redteam` data.",
+            "The specific technique and event order cannot be confirmed from "
+            "authentication data alone. To validate this hypothesis, correlate "
+            "the results with `proc`, `flows`, `dns`, and `redteam` data.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -211,8 +284,31 @@ def main() -> None:
         default=Path("analysis_report.md"),
         help="Markdown report path (default: analysis_report.md)",
     )
+    parser.add_argument(
+        "--max-events",
+        type=int,
+        help="Stop after this many valid events (useful for a reproducible fragment)",
+    )
+    parser.add_argument("--start-time", type=int, help="Include events from this timestamp")
+    parser.add_argument("--end-time", type=int, help="Include events up to this timestamp")
     args = parser.parse_args()
-    report = make_report(read_events(args.input), args.input)
+    if args.max_events is not None and args.max_events <= 0:
+        parser.error("--max-events must be positive")
+    if (
+        args.start_time is not None
+        and args.end_time is not None
+        and args.start_time > args.end_time
+    ):
+        parser.error("--start-time cannot be greater than --end-time")
+    report = make_report(
+        analyze_file(
+            args.input,
+            max_events=args.max_events,
+            start_time=args.start_time,
+            end_time=args.end_time,
+        ),
+        args.input,
+    )
     args.output.write_text(report, encoding="utf-8")
     print(f"Report written to {args.output}")
 

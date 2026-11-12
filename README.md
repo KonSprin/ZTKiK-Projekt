@@ -52,3 +52,17 @@ included sample are available in [analysis_report.md](analysis_report.md).
 Every sample record has the same timestamp (`1`), so the sample does not
 support reliable time-series analysis. For the complete dataset, provide the
 appropriate `auth.txt` or extracted `auth.txt.gz` file.
+
+The complete authentication file is very large, so a reproducible fragment can
+be analyzed without loading the entire file into memory:
+
+```bash
+python3 analyze_auth.py "/path/to/auth" \
+  --max-events 1000000 \
+  -o analysis_report_auth_1m.md
+```
+
+The script also supports `--start-time` and `--end-time`. The report evaluates
+two attack hypotheses: credential attacks (brute force/password spraying)
+through failed logins, and lateral movement through successful logons between
+different computers.
