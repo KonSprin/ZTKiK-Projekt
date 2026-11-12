@@ -37,3 +37,18 @@ Anonimizacja: identyfikatory użytkowników, komputerów i procesów są zanonim
 Rozdzielczość czasowa: 1 sekunda.
 
 Do realizacji zadania można wykorzystać wybrany fragment zbioru danych.
+
+## Sample Data Analysis
+
+Authentication event analysis can be run without additional dependencies:
+
+```bash
+python3 analyze_auth.py sample_data.csv -o analysis_report.md
+```
+
+The script validates records, calculates distribution statistics, and detects
+potential lateral movement by user accounts between computers. Results for the
+included sample are available in [analysis_report.md](analysis_report.md).
+Every sample record has the same timestamp (`1`), so the sample does not
+support reliable time-series analysis. For the complete dataset, provide the
+appropriate `auth.txt` or extracted `auth.txt.gz` file.
