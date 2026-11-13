@@ -38,6 +38,20 @@ Rozdzielczość czasowa: 1 sekunda.
 
 Do realizacji zadania można wykorzystać wybrany fragment zbioru danych.
 
+## Dane do analizy otrzymane
+
+https://csr.lanl.gov/data/auth/
+
+Zbiór danych – Uwierzytelnianie użytkowników (LANL)
+9 kolejnych miesięcy rejestrowania aktywności w sieci komputerowej Los Alamos National Laboratory (LANL).
+Ponad 708 mln zdarzeń pomyślnego uwierzytelniania użytkowników.
+Rodzaj danych: informacje o logowaniach użytkowników na komputerach w sieci firmowej.
+Struktura danych: każde zdarzenie zapisane jest w osobnym wierszu w formacie: czas, użytkownik, komputer
+Anonimizacja: dane użytkowników i komputerów zostały pozbawione informacji identyfikujących.
+Format pliku: CSV (wartości rozdzielane przecinkami).
+
+Zbiór umożliwia analizę powiązań między użytkownikami a komputerami oraz zmian aktywności logowania w czasie
+
 ## Sample Data Analysis
 
 Authentication event analysis can be run without additional dependencies:
@@ -66,6 +80,19 @@ The script also supports `--start-time` and `--end-time`. The report evaluates
 two attack hypotheses: credential attacks (brute force/password spraying)
 through failed logins, and lateral movement through successful logons between
 different computers.
+
+## Analiza otrzymanych danych (`time,user,computer`)
+
+Skrypt `analysis/analyze_modified.py` (tylko biblioteka standardowa) analizuje
+`analysis/data/lanl_auth_modified_1.csv` strumieniowo. Etap 1 wykrywa brute
+force jako nieprzerwane serie zdarzeń jednej pary użytkownik–komputer:
+
+```bash
+python3 analysis/analyze_modified.py
+# opcje: --max-gap 5 --min-events 120 --min-density 0.5 --top 15
+```
+
+Wyniki: `analysis/report_bruteforce.md` oraz `analysis/bruteforce_candidates.csv`.
 
 ## Attack Simulation
 
