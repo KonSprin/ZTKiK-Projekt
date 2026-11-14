@@ -90,9 +90,11 @@ Skrypty w `analysis/` (tylko biblioteka standardowa) analizują
 python3 analysis/detect_bruteforce.py          # 1 konto -> 1 host, ciągła seria
 python3 analysis/detect_lateral_movement.py    # 1 konto -> wiele nowych hostów
 python3 analysis/detect_password_spraying.py   # wiele kont -> 1 host w minucie
+python3 analysis/detect_off_hours.py           # aktywność konta w nocy (0-5)
 ```
 
 Każdy skrypt przyjmuje `--help`, wypisuje ranking i zapisuje CSV w `analysis/results/`.
+Wnioski: [analysis/report.md](analysis/report.md).
 
 ## Attack Simulation
 
