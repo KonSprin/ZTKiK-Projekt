@@ -83,16 +83,16 @@ different computers.
 
 ## Analiza otrzymanych danych (`time,user,computer`)
 
-Skrypt `analysis/analyze_modified.py` (tylko biblioteka standardowa) analizuje
-`analysis/data/lanl_auth_modified_1.csv` strumieniowo. Etap 1 wykrywa brute
-force jako nieprzerwane serie zdarzeń jednej pary użytkownik–komputer:
+Skrypty w `analysis/` (tylko biblioteka standardowa) analizują
+`analysis/data/lanl_auth_modified_1.csv`. Wspólne funkcje są w `common.py`.
 
 ```bash
-python3 analysis/analyze_modified.py
-# opcje: --max-gap 5 --min-events 120 --min-density 0.5 --top 15
+python3 analysis/detect_bruteforce.py          # 1 konto -> 1 host, ciągła seria
+python3 analysis/detect_lateral_movement.py    # 1 konto -> wiele nowych hostów
+python3 analysis/detect_password_spraying.py   # wiele kont -> 1 host w minucie
 ```
 
-Wyniki: `analysis/report_bruteforce.md` oraz `analysis/bruteforce_candidates.csv`.
+Każdy skrypt przyjmuje `--help`, wypisuje ranking i zapisuje CSV w `analysis/results/`.
 
 ## Attack Simulation
 
